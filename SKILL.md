@@ -6,7 +6,6 @@ metadata:
   openclaw:
     requires:
       bins:
-        - python
         - python3
     version: "2.0.1"
     author: "xt Shawn"
