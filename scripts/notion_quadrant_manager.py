@@ -428,6 +428,18 @@ def page_matches_open(task: Dict[str, Any]) -> bool:
     return not any(h in n for h in DONE_STATUS_HINTS) and not any(h in n for h in CANCEL_STATUS_HINTS)
 
 
+def page_matches_status(task: Dict[str, Any], status_list: List[str]) -> bool:
+    """检查任务状态是否匹配指定状态列表"""
+    status = str(task.get("status") or "").strip()
+    n = norm(status)
+    if not status_list:
+        return True
+    for s in status_list:
+        if norm(s) in n or n in norm(s):
+            return True
+    return False
+
+
 def due_date_value(task: Dict[str, Any]) -> Optional[date]:
     val = task.get("due")
     if not val:
@@ -525,72 +537,63 @@ def build_date_filter(fields: Dict[str, Dict[str, Any]], start: date, end: date)
     }
 
 
-def query_open_tasks_in_range(api_key: str, resolved: Dict[str, Any], fields: Dict[str, Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
+def query_tasks_in_range(api_key: str, resolved: Dict[str, Any], fields: Dict[str, Dict[str, Any]], start_date: date, end_date: date, status_list: List[str] = None) -> List[Dict[str, Any]]:
+    """查询指定时间范围内的任务，支持状态过滤"""
     ds_id = resolved["data_source_id"]
+    
+    # 构建日期过滤器
+    date_filter = build_date_filter(fields, start_date, end_date)
+    
+    # 构建状态过滤器
+    status_filter = None
+    if status_list:
+        status_prop = fields["status"]
+        status_key = prop_name("", status_prop)
+        status_type = prop_type(status_prop)
+        
+        # 构建状态过滤条件
+        status_conditions = []
+        for status in status_list:
+            if status_type == "status":
+                status_conditions.append({"property": status_key, "status": {"equals": status}})
+            else:
+                status_conditions.append({"property": status_key, "select": {"equals": status}})
+        
+        if status_conditions:
+            status_filter = {"or": status_conditions}
+    
+    # 组合过滤器
+    if status_filter:
+        combined_filter = {"and": [date_filter, status_filter]}
+    else:
+        combined_filter = date_filter
+    
+    # 查询指定时间范围的任务
+    range_pages = query_data_source(api_key, ds_id, combined_filter)
+    range_tasks = [page_to_task(p, {}, fields) for p in range_pages]
+    
+    # 标记超时任务
+    for task in range_tasks:
+        if is_overdue(task):
+            task["overdue"] = True
+    
+    # 按状态过滤
+    if status_list:
+        range_tasks = [t for t in range_tasks if page_matches_status(t, status_list)]
+    
+    return sort_tasks(range_tasks)
+
+
+def query_open_tasks_in_range(api_key: str, resolved: Dict[str, Any], fields: Dict[str, Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
+    """查询最近 X 天的未完成任务（保持向后兼容）"""
     start = today() - timedelta(days=days)
     end = today() + timedelta(days=days)
-    
-    range_filter = {"and": [build_date_filter(fields, start, end), build_status_filter(fields)]}
-    
-    due_prop = fields["due"]
-    status_filter = build_status_filter(fields)
-    key = prop_name("", due_prop)
-    overdue_filter = {
-        "and": [
-            {"property": key, "date": {"before": today().isoformat()}},
-            status_filter["and"][0],
-            status_filter["and"][1],
-        ]
-    }
-    
-    range_pages = query_data_source(api_key, ds_id, range_filter)
-    overdue_pages = query_data_source(api_key, ds_id, overdue_filter)
-    
-    range_tasks = [page_to_task(p, {}, fields) for p in range_pages]
-    overdue_tasks = [page_to_task(p, {}, fields) for p in overdue_pages]
-    
-    for task in overdue_tasks:
-        task["overdue"] = True
-    
-    tasks = overdue_tasks + range_tasks
-    tasks = [t for t in tasks if page_matches_open(t)]
-    return sort_tasks(tasks)
+    return query_tasks_in_range(api_key, resolved, fields, start, end, ["未开始", "进行中"])
 
 
 def query_today_tasks(api_key: str, resolved: Dict[str, Any], fields: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    ds_id = resolved["data_source_id"]
-    due_prop = fields["due"]
-    key = prop_name("", due_prop)
-    status_filter = build_status_filter(fields)
-    
-    today_filter = {
-        "and": [
-            {"property": key, "date": {"equals": today().isoformat()}},
-            status_filter["and"][0],
-            status_filter["and"][1],
-        ]
-    }
-    
-    overdue_filter = {
-        "and": [
-            {"property": key, "date": {"before": today().isoformat()}},
-            status_filter["and"][0],
-            status_filter["and"][1],
-        ]
-    }
-    
-    today_pages = query_data_source(api_key, ds_id, today_filter)
-    overdue_pages = query_data_source(api_key, ds_id, overdue_filter)
-    
-    today_tasks = [page_to_task(p, {}, fields) for p in today_pages]
-    overdue_tasks = [page_to_task(p, {}, fields) for p in overdue_pages]
-    
-    for task in overdue_tasks:
-        task["overdue"] = True
-    
-    tasks = overdue_tasks + today_tasks
-    tasks = [t for t in tasks if page_matches_open(t)]
-    return sort_tasks(tasks)
+    """查询今天未完成的任务（保持向后兼容）"""
+    return query_tasks_in_range(api_key, resolved, fields, today(), today(), ["未开始", "进行中"])
 
 
 def create_task(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any], fields: Dict[str, Dict[str, Any]], task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -671,6 +674,35 @@ def update_task_status(api_key: str, resolved: Dict[str, Any], schema: Dict[str,
     return page_to_task(result, schema, fields)
 
 
+def calculate_similarity(task: Dict[str, Any], query: str) -> int:
+    """计算任务与查询的相似度
+    基于任务标题、备注、分类等字段计算相似度
+    """
+    score = 0
+    
+    # 标题相似度（权重最高）
+    title = str(task.get("title") or "").strip()
+    title_score = match_title_score(title, query)
+    score += title_score * 3
+    
+    # 备注相似度
+    note = str(task.get("note") or "").strip()
+    note_score = match_title_score(note, query)
+    score += note_score * 2
+    
+    # 分类相似度
+    category = str(task.get("category") or "").strip()
+    category_score = match_title_score(category, query)
+    score += category_score
+    
+    # 四象限相似度
+    quadrant = str(task.get("quadrant") or "").strip()
+    quadrant_score = match_title_score(quadrant, query)
+    score += quadrant_score
+    
+    return score
+
+
 def find_task_by_text(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any], fields: Dict[str, Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
     ds_id = resolved["data_source_id"]
     status_filter = build_status_filter(fields)
@@ -682,6 +714,26 @@ def find_task_by_text(api_key: str, resolved: Dict[str, Any], schema: Dict[str, 
         if norm(text) in norm(title) or norm(title) in norm(text):
             return task
     return None
+
+
+def search_tasks(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any], fields: Dict[str, Dict[str, Any]], query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """搜索任务并返回最相似的前 N 个
+    """
+    ds_id = resolved["data_source_id"]
+    # 搜索所有任务（包括已完成和未完成）
+    pages = query_data_source(api_key, ds_id, None)
+    
+    tasks_with_score = []
+    for page in pages:
+        task = page_to_task(page, schema, fields)
+        score = calculate_similarity(task, query)
+        if score > 0:
+            task["similarity_score"] = score
+            tasks_with_score.append(task)
+    
+    # 按相似度排序，返回前 N 个
+    tasks_with_score.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
+    return tasks_with_score[:limit]
 
 
 def generate_summary(tasks: List[Dict[str, Any]], days: int) -> Dict[str, Any]:
@@ -774,7 +826,32 @@ def handle_today(args: Dict[str, Any]) -> None:
     json_output(True, "today", f"今天有 {len(tasks)} 个未完成任务", {"tasks": tasks})
 
 
+def handle_query(args: Dict[str, Any]) -> None:
+    """查询指定时间范围内的任务"""
+    api_key = args["notion_api_key"]
+    database_name = args["database_name"]
+    start_date_str = args["start_date"]
+    end_date_str = args["end_date"]
+    status_list = args.get("status", ["未开始", "进行中"])
+    
+    # 解析日期
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except Exception as e:
+        raise ConfigError(f"日期格式错误：{e}")
+    
+    resolved = resolve_database(api_key, database_name)
+    schema = retrieve_schema(api_key, resolved)
+    fields = build_field_map(schema)
+    
+    tasks = query_tasks_in_range(api_key, resolved, fields, start_date, end_date, status_list)
+    
+    json_output(True, "query", f"{start_date} 到 {end_date} 期间有 {len(tasks)} 个任务", {"tasks": tasks})
+
+
 def handle_recent(args: Dict[str, Any]) -> None:
+    """查询最近 X 天的未完成任务（保持向后兼容）"""
     api_key = args["notion_api_key"]
     database_name = args["database_name"]
     days = args.get("days", 7)
@@ -786,6 +863,21 @@ def handle_recent(args: Dict[str, Any]) -> None:
     tasks = query_open_tasks_in_range(api_key, resolved, fields, days)
     
     json_output(True, "recent", f"最近 {days} 天有 {len(tasks)} 个未完成任务", {"tasks": tasks})
+
+
+def handle_search(args: Dict[str, Any]) -> None:
+    """搜索指定任务"""
+    api_key = args["notion_api_key"]
+    database_name = args["database_name"]
+    query = args["query"]
+    
+    resolved = resolve_database(api_key, database_name)
+    schema = retrieve_schema(api_key, resolved)
+    fields = build_field_map(schema)
+    
+    tasks = search_tasks(api_key, resolved, schema, fields, query, limit=3)
+    
+    json_output(True, "search", f"找到 {len(tasks)} 个相关任务", {"tasks": tasks})
 
 
 def handle_complete(args: Dict[str, Any]) -> None:
@@ -897,8 +989,12 @@ def main() -> None:
             handle_add(args)
         elif action == "today":
             handle_today(args)
+        elif action == "query":
+            handle_query(args)
         elif action == "recent":
             handle_recent(args)
+        elif action == "search":
+            handle_search(args)
         elif action == "complete":
             handle_complete(args)
         elif action == "cancel":
