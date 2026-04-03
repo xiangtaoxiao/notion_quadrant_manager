@@ -141,21 +141,22 @@ python3 ./scripts/notion_quadrant_manager.py query '{"database_name":"xxx","star
 python3 ./scripts/notion_quadrant_manager.py search '{"database_name":"xxx","query":"北京出差"}'
 ```
 
-### 5.5 complete
-将任务标记为已完成。优先使用 `page_id`，否则使用最近一次任务上下文。
+### 5.5 update_status
+更新任务状态。优先使用 `page_id`，否则使用最近一次任务上下文。
 
 **参数**：
 - `notion_api_key`：Notion API 密钥
 - `database_name`：数据库名称
 - `page_id`：任务 ID（可选）
 - `text`：任务描述（用于查找任务，可选）
+- `status`：任务状态（如：未开始、进行中、完成等）
 
 **返回**：
 - 更新后的任务信息
 
 **示例**：
 ```bash
-python3 ./scripts/notion_quadrant_manager.py complete '{"database_name":"xxx","page_id":"任务ID"}'
+python3 ./scripts/notion_quadrant_manager.py update_status '{"database_name":"xxx","page_id":"任务ID","status":"进行中"}'
 ```
 
 ### 5.6 cancel

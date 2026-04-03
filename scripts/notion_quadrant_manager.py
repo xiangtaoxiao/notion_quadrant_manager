@@ -913,11 +913,15 @@ def handle_search(args: Dict[str, Any]) -> None:
     json_output(True, "search", f"找到 {len(tasks)} 个相关任务", {"tasks": tasks})
 
 
-def handle_complete(args: Dict[str, Any]) -> None:
+def handle_update_status(args: Dict[str, Any]) -> None:
     api_key = args["notion_api_key"]
     database_name = args["database_name"]
     page_id = args.get("page_id")
     text = args.get("text")
+    status = args.get("status")
+    
+    if not status:
+        raise ConfigError("未提供任务状态，请指定 status 参数")
     
     resolved = resolve_database(api_key, database_name)
     schema = retrieve_schema(api_key, resolved)
@@ -936,14 +940,26 @@ def handle_complete(args: Dict[str, Any]) -> None:
     if not page_id:
         raise ConfigError("未找到任务，请提供任务 ID 或描述")
     
-    task = update_task_status(api_key, resolved, schema, fields, page_id, "done")
+    # 直接使用用户指定的状态
+    status_prop = fields["status"]
+    status_key = prop_key_for_page(schema, status_prop)
+    status_type = prop_type(status_prop)
+    
+    body = {
+        "properties": {
+            status_key: {status_type: {"name": status}},
+        },
+    }
+    
+    result = notion_request(api_key, "PATCH", f"/pages/{page_id}", body=body)
+    task = page_to_task(result, schema, fields)
     
     # 保存状态到缓存
     cache = state_load()
     cache["fields"] = fields
     state_save(cache)
     
-    json_output(True, "complete", "任务已标记为已完成", {"task": task})
+    json_output(True, "update_status", f"任务状态已更新为 {status}", {"task": task})
 
 
 def handle_cancel(args: Dict[str, Any]) -> None:
@@ -1044,8 +1060,8 @@ def main() -> None:
                 handle_recent(args)
             elif action == "search":
                 handle_search(args)
-            elif action == "complete":
-                handle_complete(args)
+            elif action == "update_status":
+                handle_update_status(args)
             elif action == "cancel":
                 handle_cancel(args)
             elif action == "summary":
