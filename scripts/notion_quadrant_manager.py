@@ -15,7 +15,8 @@ NOTION_VERSION = "2025-09-03"
 NOTION_BASE_URL = "https://api.notion.com/v1"
 TIMEZONE = ZoneInfo("Asia/Singapore")
 
-STATE_DIR = Path(os.getenv("OPENCLAW_STATE_DIR", "."))
+# 使用脚本所在目录存储状态文件
+STATE_DIR = Path(__file__).parent
 STATE_PATH = STATE_DIR / "notion_quadrant_manager_state.json"
 
 DONE_STATUS_HINTS = ("已完成", "完成", "done", "complete", "completed", "finished")
