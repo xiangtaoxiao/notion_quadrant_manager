@@ -1,0 +1,26 @@
+# Python virtual environment
+venv/
+env/
+.venv/
+
+# JSON state files
+*.json
+
+# IDE files
+.DS_Store
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
