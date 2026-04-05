@@ -38,7 +38,7 @@ metadata:
 - `notion_database_name`：数据库名称
 
 - 如果数据库名称不存在、Notion 连接失败、或缺少必需字段，则提示用户修正配置。
-- 禁止基于memory推测数据库名称。
+- 禁止基于memory记忆文件获取数据库名称。
 
 ### 2.3 状态文件
 - **存储位置**：脚本notion_quadrant_manager.py所在目录下的 `notion_quadrant_manager_state.json`
