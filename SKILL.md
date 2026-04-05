@@ -38,7 +38,7 @@ metadata:
 - `notion_database_name`：数据库名称
 
 - 如果数据库名称不存在、Notion 连接失败、或缺少必需字段，则提示用户修正配置。
-- 禁止基于memory记忆文件获取数据库名称。
+- 禁止从memory记忆文件或TOOLS.md文件获取数据库名称。
 
 ### 2.3 状态文件
 - **存储位置**：脚本notion_quadrant_manager.py所在目录下的 `notion_quadrant_manager_state.json`
@@ -204,4 +204,5 @@ Python 脚本返回 JSON，至少包含：
 - `data`：操作结果数据
 
 Agent 读取 JSON 后再组织自然语言回复给用户。
+当需要列出多项任务时，使用列表、表格、分割线、图标等格式，使内容清晰，重点突出。
 
