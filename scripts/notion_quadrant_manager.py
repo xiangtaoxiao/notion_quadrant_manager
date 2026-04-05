@@ -64,10 +64,13 @@ def norm(text: Any) -> str:
 def state_load() -> Dict[str, Any]:
     try:
         if STATE_PATH.exists():
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if "tasks" not in state:
+                state["tasks"] = []
+            return state
     except Exception:
         pass
-    return {}
+    return {"tasks": []}
 
 
 def state_save(state: Dict[str, Any]) -> None:
@@ -76,6 +79,51 @@ def state_save(state: Dict[str, Any]) -> None:
         STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
         raise NotionQMError(f"状态保存失败：{exc}") from exc
+
+
+def update_task_in_state(task: Dict[str, Any]) -> None:
+    """更新状态文件中的任务，已存在的覆盖，不存在的添加"""
+    state = state_load()
+    tasks = state.get("tasks", [])
+    
+    # 检查任务是否已存在
+    task_id = task.get("page_id")
+    if task_id:
+        # 查找并更新已存在的任务
+        for i, existing_task in enumerate(tasks):
+            if existing_task.get("page_id") == task_id:
+                tasks[i] = task
+                break
+        else:
+            # 任务不存在，添加新任务
+            tasks.append(task)
+    
+    state["tasks"] = tasks
+    state_save(state)
+
+
+def add_tasks_to_state(tasks: List[Dict[str, Any]]) -> None:
+    """批量添加任务到状态文件，已存在的覆盖，不存在的添加"""
+    state = state_load()
+    existing_tasks = state.get("tasks", [])
+    existing_task_ids = {task.get("page_id") for task in existing_tasks if task.get("page_id")}
+    
+    for task in tasks:
+        task_id = task.get("page_id")
+        if task_id:
+            if task_id in existing_task_ids:
+                # 更新已存在的任务
+                for i, existing_task in enumerate(existing_tasks):
+                    if existing_task.get("page_id") == task_id:
+                        existing_tasks[i] = task
+                        break
+            else:
+                # 添加新任务
+                existing_tasks.append(task)
+                existing_task_ids.add(task_id)
+    
+    state["tasks"] = existing_tasks
+    state_save(state)
 
 
 def json_output(ok: bool, action: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
@@ -734,8 +782,8 @@ def find_task_by_text(api_key: str, resolved: Dict[str, Any], schema: Dict[str, 
     return None
 
 
-def search_tasks(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any], fields: Dict[str, Dict[str, Any]], query: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """搜索任务并返回最相似的前 N 个
+def search_tasks(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any], fields: Dict[str, Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    """搜索任务并返回所有匹配的任务
     """
     ds_id = resolved["data_source_id"]
     # 搜索所有任务（包括已完成和未完成）
@@ -749,9 +797,9 @@ def search_tasks(api_key: str, resolved: Dict[str, Any], schema: Dict[str, Any],
             task["similarity_score"] = score
             tasks_with_score.append(task)
     
-    # 按相似度排序，返回前 N 个
+    # 按相似度排序，返回所有匹配的任务
     tasks_with_score.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
-    return tasks_with_score[:limit]
+    return tasks_with_score
 
 
 def generate_summary(tasks: List[Dict[str, Any]], days: int) -> Dict[str, Any]:
@@ -797,14 +845,21 @@ def handle_bootstrap(args: Dict[str, Any]) -> None:
     schema = retrieve_schema(api_key, resolved)
     fields = build_field_map(schema)
     
-    # 保存字段映射到缓存
+    # 查询所有未完成的待办事项
+    ds_id = resolved["data_source_id"]
+    status_filter = build_status_filter(fields)
+    pages = query_data_source(api_key, ds_id, status_filter)
+    tasks = [page_to_task(p, schema, fields) for p in pages]
+    
+    # 保存字段映射和任务到缓存
     cache = state_load()
     cache["fields"] = fields
-    state_save(cache)
+    add_tasks_to_state(tasks)
     
-    json_output(True, "bootstrap", "数据库连接成功", {
+    json_output(True, "bootstrap", "数据库连接成功，已加载所有未完成任务", {
         "resolved": resolved,
         "fields": fields,
+        "tasks_count": len(tasks)
     })
 
 
@@ -887,6 +942,9 @@ def handle_query(args: Dict[str, Any]) -> None:
     cache["fields"] = fields
     state_save(cache)
     
+    # 将查询到的结果记录到状态文件中
+    add_tasks_to_state(tasks)
+    
     if summary:
         # 生成总结
         summary_data = generate_summary(tasks, (end_date - start_date).days + 1)
@@ -949,21 +1007,38 @@ def handle_search(args: Dict[str, Any]) -> None:
     schema = retrieve_schema(api_key, resolved)
     fields = build_field_map(schema)
     
-    tasks = search_tasks(api_key, resolved, schema, fields, query, limit=3)
+    # 优先从状态文件中搜索
+    state = state_load()
+    state_tasks = state.get("tasks", [])
+    
+    # 模糊匹配状态文件中的任务
+    matched_tasks = []
+    for task in state_tasks:
+        title = str(task.get("title") or "")
+        if norm(query) in norm(title) or norm(title) in norm(query):
+            task["similarity_score"] = 1.0  # 状态文件中的匹配分数设为最高
+            matched_tasks.append(task)
+    
+    # 如果状态文件中没有找到，调用 API 搜索
+    if not matched_tasks:
+        matched_tasks = search_tasks(api_key, resolved, schema, fields, query)
+        # 将 API 搜索到的任务记录到状态文件
+        add_tasks_to_state(matched_tasks)
     
     # 保存状态到缓存
     cache = state_load()
     cache["fields"] = fields
     state_save(cache)
     
-    json_output(True, "search", f"找到 {len(tasks)} 个相关任务", {"tasks": tasks})
+    json_output(True, "search", f"找到 {len(matched_tasks)} 个相关任务", {"tasks": matched_tasks})
 
 
 def handle_update_status(args: Dict[str, Any]) -> None:
     api_key = args["notion_api_key"]
     database_name = args["database_name"]
     page_id = args.get("page_id")
-    text = args.get("text")
+    title = args.get("title")
+    note = args.get("note")
     status = args.get("status")
     due_date = args.get("due_date")
     
@@ -975,17 +1050,44 @@ def handle_update_status(args: Dict[str, Any]) -> None:
     fields = build_field_map(schema)
     
     if not page_id:
-        cache = state_load()
-        last_task = cache.get("last_task")
-        if last_task:
-            page_id = last_task.get("page_id")
-        elif text:
-            task = find_task_by_text(api_key, resolved, schema, fields, text)
-            if task:
-                page_id = task["page_id"]
+        # 优先使用任务标题或备注进行精确匹配
+        if title or note:
+            # 搜索所有任务
+            ds_id = resolved["data_source_id"]
+            pages = query_data_source(api_key, ds_id, None)
+            
+            for page in pages:
+                task = page_to_task(page, schema, fields)
+                # 精确匹配标题或备注
+                task_title = str(task.get("title") or "").strip()
+                task_note = str(task.get("note") or "").strip()
+                task_status = str(task.get("status") or "").strip()
+                
+                # 标题、备注和状态的精确匹配
+                if (title and task_title == title) or (note and task_note == note):
+                    if status and task_status == status:
+                        page_id = task["page_id"]
+                        break
+                    elif not status:
+                        page_id = task["page_id"]
+                        break
+            
+            # 如果精确匹配失败，使用 search 方法
+            if not page_id and (title or note):
+                search_query = title or note
+                matched_tasks = search_tasks(api_key, resolved, schema, fields, search_query)
+                if matched_tasks:
+                    # 使用第一个匹配的任务
+                    page_id = matched_tasks[0]["page_id"]
+        else:
+            # 没有提供标题或备注，尝试使用最近的任务
+            cache = state_load()
+            last_task = cache.get("last_task")
+            if last_task:
+                page_id = last_task.get("page_id")
     
     if not page_id:
-        raise ConfigError("未找到任务，请提供任务 ID 或描述")
+        raise ConfigError("未找到任务，请提供任务标题、备注或状态")
     
     # 构建更新请求体
     body = {"properties": {}}
@@ -1011,6 +1113,9 @@ def handle_update_status(args: Dict[str, Any]) -> None:
     cache["fields"] = fields
     state_save(cache)
     
+    # 同步更新状态文件里对应的任务
+    update_task_in_state(task)
+    
     # 构建消息
     messages = []
     if status:
@@ -1027,7 +1132,7 @@ def handle_update_status(args: Dict[str, Any]) -> None:
 def handle_summary(args: Dict[str, Any]) -> None:
     api_key = args["notion_api_key"]
     database_name = args["database_name"]
-    days = args.get("days", 15)
+    days = args.get("days", 7)
     
     resolved = resolve_database(api_key, database_name)
     schema = retrieve_schema(api_key, resolved)
@@ -1044,6 +1149,50 @@ def handle_summary(args: Dict[str, Any]) -> None:
     json_output(True, "summary", f"最近 {days} 天任务总结", {"summary": summary})
 
 
+def handle_get_state(args: Dict[str, Any]) -> None:
+    """获取状态文件信息，如果状态文件不存在则执行 bootstrap"""
+    # 检查状态文件是否存在
+    state = state_load()
+    if not state.get("resolved") or not state.get("fields"):
+        # 状态文件不存在或不完整，执行 bootstrap 逻辑
+        api_key = args["notion_api_key"]
+        database_name = args["database_name"]
+        
+        resolved = resolve_database(api_key, database_name)
+        schema = retrieve_schema(api_key, resolved)
+        fields = build_field_map(schema)
+        
+        # 查询所有未完成的待办事项
+        ds_id = resolved["data_source_id"]
+        status_filter = build_status_filter(fields)
+        pages = query_data_source(api_key, ds_id, status_filter)
+        tasks = [page_to_task(p, schema, fields) for p in pages]
+        
+        # 保存字段映射和任务到缓存
+        state["resolved"] = resolved
+        state["fields"] = fields
+        add_tasks_to_state(tasks)
+        
+        json_output(True, "get_state", "数据库连接成功，已加载所有未完成任务", {
+            "tasks_count": len(tasks),
+            "resolved": resolved,
+            "fields": fields,
+            "last_task": state.get("last_task"),
+            "bootstrapped": True
+        })
+    else:
+        # 状态文件存在，执行原 get_state 逻辑
+        state_info = {
+            "tasks_count": len(state.get("tasks", [])),
+            "resolved": state.get("resolved"),
+            "fields": state.get("fields"),
+            "last_task": state.get("last_task"),
+            "bootstrapped": False
+        }
+        
+        json_output(True, "get_state", "获取状态信息成功", state_info)
+
+
 def get_api_key() -> str:
     """从 ~/.config/notion/api_key 文件读取 API 密钥"""
     api_key_path = Path.home() / ".config" / "notion" / "api_key"
@@ -1056,6 +1205,20 @@ def get_api_key() -> str:
         return api_key
     except Exception as e:
         raise ConfigError(f"读取 API 密钥失败：{e}") from e
+
+
+def get_database_name() -> str:
+    """从 ~/.config/notion/database_name 文件读取数据库名称"""
+    database_name_path = Path.home() / ".config" / "notion" / "database_name"
+    try:
+        if not database_name_path.exists():
+            raise ConfigError(f"数据库名称文件不存在：{database_name_path}")
+        database_name = database_name_path.read_text(encoding="utf-8").strip()
+        if not database_name:
+            raise ConfigError("数据库名称文件为空")
+        return database_name
+    except Exception as e:
+        raise ConfigError(f"读取数据库名称失败：{e}") from e
 
 def main() -> None:
     try:
@@ -1074,8 +1237,11 @@ def main() -> None:
         try:
             # 从配置文件读取 API 密钥
             api_key = get_api_key()
-            # 将 API 密钥添加到 args 中
+            # 从配置文件读取数据库名称
+            database_name = get_database_name()
+            # 将 API 密钥和数据库名称添加到 args 中
             args["notion_api_key"] = api_key
+            args["database_name"] = database_name
             
             if action == "bootstrap":
                 handle_bootstrap(args)
@@ -1091,7 +1257,8 @@ def main() -> None:
                 handle_search(args)
             elif action == "update_status":
                 handle_update_status(args)
-
+            elif action == "get_state":
+                handle_get_state(args)
             elif action == "summary":
                 handle_summary(args)
             else:

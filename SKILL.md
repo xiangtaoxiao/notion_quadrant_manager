@@ -21,8 +21,8 @@ metadata:
 - **添加任务**：用户表达需要记录、创建或新增待办事项的意图，包含任务内容和时间相关信息
 - **查询任务**：用户询问指定时间范围内的待办事项（如今天、接下来几天、特定日期范围等），或希望对任务进行总结、统计分析、四象限分类、了解当前任务的整体情况
 - **搜索任务**：用户询问特定任务的相关信息，提供关键词或描述
-- **更新任务状态**：用户表示已经完成某项任务、想要将任务标记为已完成/进行中/未开始/已取消等状态
-- **更新任务截止日期**：用户希望修改任务的截止日期，或将任务延期
+- **更新任务状态**：用户表示已经完成某项任务、想要将任务标记为已完成/进行中/未开始/已取消等状态，可通过任务标题或备注进行匹配
+- **更新任务截止日期**：用户希望修改任务的截止日期，或将任务延期，可通过任务标题或备注进行匹配
 
 由于agent默认优先从记忆文件中查询待办事项，因此首次触发用户需明确输入使用技能。
 
@@ -36,16 +36,21 @@ metadata:
    ```
 
 ### 2.2 数据库配置
-在需要bootstrap时询问用户或查询状态文件中的数据库名称：
-- `notion_database_name`：数据库名称
+用户需要提供数据库名称，执行以下命令存储数据库名称：
+   ```bash
+   mkdir -p ~/.config/notion
+   echo "your_database_name_here" > ~/.config/notion/database_name
+   ```
 
 - 如果数据库名称不存在、Notion 连接失败、或缺少必需字段，则提示用户修正配置。
 - 禁止从memory记忆文件或TOOLS.md文件或上下文获取数据库名称。
+- 禁止在脚本调用失败时自行调用Notion API。
 
 ### 2.3 状态文件
 - **存储位置**：脚本notion_quadrant_manager.py所在目录下的 `notion_quadrant_manager_state.json`
-- **作用**：缓存数据库连接信息和字段映射，提高操作效率
+- **作用**：缓存数据库连接信息、字段映射和任务数据，提高操作效率
 - **注意事项**：确保脚本所在目录有写入权限
+- **访问方式**：通过 `get_state` 动作获取状态文件中的数据库相关信息，禁止阅读状态文件
 
 ## 3. 必要字段
 
@@ -65,37 +70,29 @@ metadata:
 python3 ./scripts/notion_quadrant_manager.py <action> '<json_args>'
 ```
 
-`json_args` 必须包含：
-- `database_name`：数据库名称
-- 除非执行bootstrap动作，否则数据库名称必须取自`notion_quadrant_manager_state.json`文件
-
-API 密钥会自动从 `~/.config/notion/api_key` 文件读取。
-
 ## 5. 可调用动作
 
-### 5.1 bootstrap
-检查是否有状态文件，如果没有则bootstrap:
-连接 Notion，定位数据库，读取 schema，并保存字段映射。
+### 5.1 get_state
+获取状态文件中 database 的相关信息，用于 AI 了解数据库基本情况，并识别必要字段。如果状态文件不存在或不完整，会自动执行 bootstrap 操作。
 
 **参数**：
-- `notion_api_key`：Notion API 密钥
-- `database_name`：数据库名称
+- 无需传递参数
 
 **返回**：
-- 数据库连接信息
-- 字段映射
+- `tasks_count`：状态文件中的任务数量
+- `resolved`：数据库解析信息
+- `fields`：字段映射
+- `last_task`：最近一次操作的任务
+- `bootstrapped`：是否执行了 bootstrap 操作
 
 **示例**：
 ```bash
-python3 ./scripts/notion_quadrant_manager.py bootstrap '{"database_name":"xxx"}'
+python3 ./scripts/notion_quadrant_manager.py get_state '{}'
 ```
-
 ### 5.2 add
 创建任务。理解用户意图，归纳总结任务标题、备注、分类，识别对话中的日期、四象限、状态，生成结构化数据输出给脚本执行。
 
 **参数**：
-- `notion_api_key`：Notion API 密钥
-- `database_name`：数据库名称
 - `title`：任务标题（Agent 归纳总结）
 - `due_date`：截止日期（ISO 格式）
 - `quadrant`：四象限分类（Agent推断）
@@ -108,15 +105,13 @@ python3 ./scripts/notion_quadrant_manager.py bootstrap '{"database_name":"xxx"}'
 
 **示例**：
 ```bash
-python3 ./scripts/notion_quadrant_manager.py add '{"database_name":"xxx","title":"去北京","due_date":"2026-03-28","quadrant":"重要紧急","status":"未开始","category":"工作","note":"商务出差"}'
+python3 ./scripts/notion_quadrant_manager.py add '{"title":"去北京","due_date":"2026-03-28","quadrant":"重要紧急","status":"未开始","category":"工作","note":"商务出差"}'
 ```
 
 ### 5.3 query
 查询指定时间范围内的任务，支持状态过滤，可选择生成总结。
 
 **参数**：
-- `notion_api_key`：Notion API 密钥
-- `database_name`：数据库名称
 - `start_date`：开始日期（可选，格式：YYYY-MM-DD）
 - `end_date`：结束日期（可选，格式：YYYY-MM-DD）
 - `days`：天数（可选，当不提供 start_date 和 end_date 时使用，默认：7）
@@ -130,36 +125,32 @@ python3 ./scripts/notion_quadrant_manager.py add '{"database_name":"xxx","title"
 **示例**：
 ```bash
 # 查询指定日期范围的任务
-python3 ./scripts/notion_quadrant_manager.py query '{"database_name":"xxx","start_date":"2026-04-01","end_date":"2026-04-07","status":["未开始", "进行中"]}'
+python3 ./scripts/notion_quadrant_manager.py query '{"start_date":"2026-04-01","end_date":"2026-04-07","status":["未开始", "进行中"]}'
 
 # 查询最近 7 天的任务并生成总结
-python3 ./scripts/notion_quadrant_manager.py query '{"database_name":"xxx","days":7,"summary":true}'
+python3 ./scripts/notion_quadrant_manager.py query '{"days":7,"summary":true}'
 ```
 
 ### 5.4 search
 搜索指定任务。
 
 **参数**：
-- `notion_api_key`：Notion API 密钥
-- `database_name`：数据库名称
 - `query`：查询关键词
 
 **返回**：
-- 最相似的前 3 个任务
+- 所有匹配到的任务（按相似度排序）
 
 **示例**：
 ```bash
-python3 ./scripts/notion_quadrant_manager.py search '{"database_name":"xxx","query":"北京出差"}'
+python3 ./scripts/notion_quadrant_manager.py search '{"query":"北京出差"}'
 ```
 
 ### 5.5 update_status
-更新任务状态和/或截止日期。优先使用 `page_id`，否则使用最近一次任务上下文。
+更新任务状态和/或截止日期。优先使用任务标题或备注进行精确匹配，更新失败或不确定具体任务参数就使用search方法和用户确认。
 
 **参数**：
-- `notion_api_key`：Notion API 密钥
-- `database_name`：数据库名称
-- `page_id`：任务 ID（可选）
-- `text`：任务描述（用于查找任务，可选）
+- `title`：任务标题（用于查找任务，可选）
+- `note`：任务备注（用于查找任务，可选）
 - `status`：任务状态（可选，如：未开始、进行中、完成等）
 - `due_date`：任务截止日期（可选，格式：YYYY-MM-DD）
 
@@ -168,15 +159,16 @@ python3 ./scripts/notion_quadrant_manager.py search '{"database_name":"xxx","que
 
 **示例**：
 ```bash
-# 更新任务状态为进行中
-python3 ./scripts/notion_quadrant_manager.py update_status '{"database_name":"xxx","page_id":"任务ID","status":"进行中"}'
+# 通过任务标题更新状态为进行中
+python3 ./scripts/notion_quadrant_manager.py update_status '{"title":"去北京","status":"进行中"}'
 
-# 更新任务截止日期
-python3 ./scripts/notion_quadrant_manager.py update_status '{"database_name":"xxx","page_id":"任务ID","due_date":"2026-04-15"}'
+# 通过任务备注更新截止日期
+python3 ./scripts/notion_quadrant_manager.py update_status '{"note":"商务出差","due_date":"2026-04-15"}'
 
 # 同时更新任务状态和截止日期
-python3 ./scripts/notion_quadrant_manager.py update_status '{"database_name":"xxx","page_id":"任务ID","status":"进行中","due_date":"2026-04-15"}'
+python3 ./scripts/notion_quadrant_manager.py update_status '{"title":"去北京","status":"进行中","due_date":"2026-04-15"}'
 ```
+
 
 ## 6. 四象限处理
 
