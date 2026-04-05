@@ -34,10 +34,11 @@ metadata:
    ```
 
 ### 2.2 数据库配置
-用户必须提供：
+在需要bootstrap时询问用户或查询状态文件中的数据库名称：
 - `notion_database_name`：数据库名称
 
-如果数据库名称不存在、Notion 连接失败、或缺少必需字段，则提示用户修正配置。
+- 如果数据库名称不存在、Notion 连接失败、或缺少必需字段，则提示用户修正配置。
+- 禁止基于memory推测数据库名称。
 
 ### 2.3 状态文件
 - **存储位置**：脚本notion_quadrant_manager.py所在目录下的 `notion_quadrant_manager_state.json`
@@ -72,7 +73,7 @@ API 密钥会自动从 `~/.config/notion/api_key` 文件读取。
 ## 5. 可调用动作
 
 ### 5.1 bootstrap
-检查是否有状态文件，如果没有则执行:连接 Notion，定位数据库，读取 schema，并保存字段映射。
+检查是否有状态文件，如果没有则bootstrap:连接 Notion，定位数据库，读取 schema，并保存字段映射。
 
 **参数**：
 - `notion_api_key`：Notion API 密钥
