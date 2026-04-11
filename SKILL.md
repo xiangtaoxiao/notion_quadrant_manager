@@ -164,14 +164,18 @@ python3 ./scripts/notion_quadrant_manager.py query '{"days":7,"category":"工作
 python3 ./scripts/notion_quadrant_manager.py search '{"query":"北京出差"}'
 ```
 
-### 5.5 update_status
-更新任务状态和/或截止日期。优先使用任务标题或备注进行精确匹配，更新失败或不确定具体任务参数就使用search方法和用户确认。
+### 5.5 update
+更新任务的状态、截止日期、分类、标题、备注或四象限。优先使用任务标题或备注进行精确匹配，更新失败或不确定具体任务参数就使用search方法和用户确认。
 
 **参数**：
 - `title`：任务标题（用于查找任务，必选）
 - `note`：任务备注（用于查找任务，可选）
 - `status`：任务状态（可选，如：未开始、进行中、完成等）
 - `due_date`：任务截止日期（可选，格式：YYYY-MM-DD）
+- `category`：任务分类（可选）
+- `new_title`：新的任务标题（可选）
+- `new_note`：新的任务备注（可选）
+- `quadrant`：任务四象限（可选，如：重要紧急、紧急不重要、重要不紧急、不重要不紧急）
 
 **返回**：
 - 更新后的任务信息
@@ -179,13 +183,13 @@ python3 ./scripts/notion_quadrant_manager.py search '{"query":"北京出差"}'
 **示例**：
 ```bash
 # 通过任务标题更新状态为进行中
-python3 ./scripts/notion_quadrant_manager.py update_status '{"title":"去北京","status":"进行中"}'
+python3 ./scripts/notion_quadrant_manager.py update '{"title":"去北京","status":"进行中"}'
 
 # 通过任务备注更新截止日期
-python3 ./scripts/notion_quadrant_manager.py update_status '{"note":"商务出差","due_date":"2026-04-15"}'
+python3 ./scripts/notion_quadrant_manager.py update '{"note":"商务出差","due_date":"2026-04-15"}'
 
 # 同时更新任务状态和截止日期
-python3 ./scripts/notion_quadrant_manager.py update_status '{"title":"去北京","status":"进行中","due_date":"2026-04-15"}'
+python3 ./scripts/notion_quadrant_manager.py update '{"title":"去北京","status":"进行中","due_date":"2026-04-15"}'
 ```
 
 
@@ -217,7 +221,7 @@ Python 脚本返回 JSON，至少包含：
 - `data`：操作结果数据
 
 Agent 读取 JSON 后，根据回复消息的平台（微信、飞书等），选择合适的排版（列表、分割线、emoji图标等）对齐并罗列任务，组织自然语言回复给用户，保证内容清晰，重点突出。
-- 微信端使用列表罗列任务，禁用表格的格式或markdown回复用户
+- 微信端使用列表罗列任务，严禁用表格的格式或markdown回复用户
 
 **微信QQ示例**：
 ```

@@ -1059,17 +1059,21 @@ def handle_search(args: Dict[str, Any]) -> None:
     json_output(True, "search", f"找到 {len(matched_tasks)} 个相关任务", {"tasks": matched_tasks})
 
 
-def handle_update_status(args: Dict[str, Any]) -> None:
+def handle_update(args: Dict[str, Any]) -> None:
     api_key = args["notion_api_key"]
     database_name = args["database_name"]
     page_id = args.get("page_id")
-    title = args.get("title")
+    search_title = args.get("title")
     note = args.get("note")
     status = args.get("status")
     due_date = args.get("due_date")
+    category = args.get("category")
+    new_title = args.get("new_title")
+    new_note = args.get("new_note")
+    quadrant = args.get("quadrant")
     
-    if not status and not due_date:
-        raise ConfigError("未提供任务状态或截止日期，请至少指定一个参数")
+    if not status and not due_date and not category and not new_title and not new_note and not quadrant:
+        raise ConfigError("未提供任务状态、截止日期、分类、标题、备注或四象限，请至少指定一个参数")
     
     resolved = resolve_database(api_key, database_name)
     schema = retrieve_schema(api_key, resolved)
@@ -1077,7 +1081,7 @@ def handle_update_status(args: Dict[str, Any]) -> None:
     
     if not page_id:
         # 优先使用任务标题或备注进行精确匹配
-        if title or note:
+        if search_title or note:
             # 搜索所有任务
             ds_id = resolved["data_source_id"]
             pages = query_data_source(api_key, ds_id, None)
@@ -1090,7 +1094,7 @@ def handle_update_status(args: Dict[str, Any]) -> None:
                 task_status = str(task.get("status") or "").strip()
                 
                 # 标题、备注和状态的精确匹配
-                if (title and task_title == title) or (note and task_note == note):
+                if (search_title and task_title == search_title) or (note and task_note == note):
                     if status and task_status == status:
                         page_id = task["page_id"]
                         break
@@ -1099,8 +1103,8 @@ def handle_update_status(args: Dict[str, Any]) -> None:
                         break
             
             # 如果精确匹配失败，使用 search 方法
-            if not page_id and (title or note):
-                search_query = title or note
+            if not page_id and (search_title or note):
+                search_query = search_title or note
                 matched_tasks = search_tasks(api_key, resolved, schema, fields, search_query)
                 if matched_tasks:
                     # 使用第一个匹配的任务
@@ -1125,6 +1129,44 @@ def handle_update_status(args: Dict[str, Any]) -> None:
         due_key = prop_key_for_page(schema, due_prop)
         body["properties"][due_key] = {"date": {"start": due_date}}
     
+    # 更新分类
+    if category:
+        category_prop = fields["category"]
+        category_key = prop_key_for_page(schema, category_prop)
+        category_type = prop_type(category_prop)
+        category_value = choose_option(category_prop, [category], True)
+        if category_type == "multi_select":
+            body["properties"][category_key] = {"multi_select": [{"name": category_value}]}
+        else:
+            body["properties"][category_key] = {category_type: {"name": category_value}}
+    
+    # 更新标题
+    if new_title:
+        title_prop = fields["title"]
+        title_key = prop_key_for_page(schema, title_prop)
+        body["properties"][title_key] = {"title": rich_text_payload(new_title)}
+    
+    # 更新备注
+    if new_note:
+        note_prop = fields["note"]
+        note_key = prop_key_for_page(schema, note_prop)
+        note_type = prop_type(note_prop)
+        if note_type == "rich_text":
+            body["properties"][note_key] = {"rich_text": rich_text_payload(new_note)}
+        else:
+            body["properties"][note_key] = {"title": rich_text_payload(new_note)}
+    
+    # 更新四象限
+    if quadrant:
+        quadrant_prop = fields["quadrant"]
+        quadrant_key = prop_key_for_page(schema, quadrant_prop)
+        quadrant_type = prop_type(quadrant_prop)
+        quadrant_value = choose_option(quadrant_prop, [quadrant], True)
+        if quadrant_type == "multi_select":
+            body["properties"][quadrant_key] = {"multi_select": [{"name": quadrant_value}]}
+        else:
+            body["properties"][quadrant_key] = {quadrant_type: {"name": quadrant_value}}
+    
     result = notion_request(api_key, "PATCH", f"/pages/{page_id}", body=body)
     task = page_to_task(result, schema, fields)
     
@@ -1142,8 +1184,16 @@ def handle_update_status(args: Dict[str, Any]) -> None:
         messages.append(f"任务状态已更新为 {status}")
     if due_date:
         messages.append(f"任务截止日期已更新为 {due_date}")
+    if category:
+        messages.append(f"任务分类已更新为 {category}")
+    if new_title:
+        messages.append(f"任务标题已更新为 {new_title}")
+    if new_note:
+        messages.append(f"任务备注已更新")
+    if quadrant:
+        messages.append(f"任务四象限已更新为 {quadrant}")
     
-    json_output(True, "update_status", "，".join(messages), {"task": task})
+    json_output(True, "update", "，".join(messages), {"task": task})
 
 
 
@@ -1278,8 +1328,8 @@ def main() -> None:
                 handle_recent(args)
             elif action == "search":
                 handle_search(args)
-            elif action == "update_status":
-                handle_update_status(args)
+            elif action == "update":
+                handle_update(args)
             elif action == "get_state":
                 handle_get_state(args)
             elif action == "summary":
